@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-sapaid",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "n8n community nodes for sapaid, the WhatsApp API platform for Indonesian developers and CS teams",
   "author": {
     "name": "sapaid",
