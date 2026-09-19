@@ -1,0 +1,216 @@
+import type { IDataObject, IExecuteFunctions } from 'n8n-workflow';
+import { NodeOperationError } from 'n8n-workflow';
+import { normalizeRecipient } from '../../shared/phone';
+import { sanitizePathParam } from '../../shared/sanitizePathParam';
+
+/** What an object with nothing useful to say stringifies to. */
+const OPAQUE_OBJECT = '[object Object]';
+
+/**
+ * A node parameter read as text. An expression can resolve to a number, a boolean
+ * or an object, and calling .trim() on one throws a TypeError that reaches the
+ * user as an opaque error naming no field. A numeric ID keeps working; a bare
+ * object is refused with a hint, because "[object Object]" would otherwise be
+ * accepted by the server and land in a chat as a real message.
+ */
+export function asText(value: unknown, label = 'This field'): string {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  if (typeof value === 'object') {
+    let text: string;
+    try {
+      text = String(value);
+    } catch {
+      text = OPAQUE_OBJECT;
+    }
+    if (text === OPAQUE_OBJECT) {
+      throw new Error(
+        `${label} must be text. Point the expression at the value itself, e.g. {{ $json.data.text }}.`,
+      );
+    }
+    return text.trim();
+  }
+  return typeof value === 'string' ? value.trim() : String(value).trim();
+}
+
+/**
+ * Reads a required free-text parameter, trimmed, optionally length-checked so
+ * oversized input fails with a pointed message instead of a generic 400.
+ */
+export function requireText(
+  ctx: IExecuteFunctions,
+  paramName: string,
+  label: string,
+  itemIndex: number,
+  maxLength?: number,
+): string {
+  const value = asText(ctx.getNodeParameter(paramName, itemIndex), label);
+  if (!value) {
+    throw new NodeOperationError(ctx.getNode(), `${label} cannot be empty`, { itemIndex });
+  }
+  if (maxLength !== undefined && value.length > maxLength) {
+    throw new NodeOperationError(ctx.getNode(), `${label} cannot exceed ${maxLength} characters`, {
+      itemIndex,
+    });
+  }
+  return value;
+}
+
+/** An optional text parameter: undefined when blank, so the caller omits the key. */
+export function optionalText(
+  ctx: IExecuteFunctions,
+  paramName: string,
+  label: string,
+  itemIndex: number,
+): string | undefined {
+  const value = asText(ctx.getNodeParameter(paramName, itemIndex, ''), label);
+  return value || undefined;
+}
+
+/**
+ * Reads a required ID parameter destined for a URL path segment. The bare Error
+ * from sanitizePathParam is rewrapped so the item index survives.
+ */
+export function requirePathId(
+  ctx: IExecuteFunctions,
+  paramName: string,
+  label: string,
+  itemIndex: number,
+): string {
+  try {
+    return sanitizePathParam(ctx.getNodeParameter(paramName, itemIndex), label);
+  } catch (error) {
+    throw new NodeOperationError(ctx.getNode(), (error as Error).message, { itemIndex });
+  }
+}
+
+/**
+ * Reads the recipient of a send, normalised to the international form the API
+ * expects (`0812…` → `62812…`; a value with `@` is a chat or group ID and passes
+ * through). Refuses what cannot be a number so the field is named, rather than
+ * forwarding text the server will reject.
+ */
+export function requireRecipient(
+  ctx: IExecuteFunctions,
+  paramName: string,
+  label: string,
+  itemIndex: number,
+): string {
+  const raw = asText(ctx.getNodeParameter(paramName, itemIndex), label);
+  if (!raw) {
+    throw new NodeOperationError(ctx.getNode(), `${label} cannot be empty`, { itemIndex });
+  }
+  const normalized = normalizeRecipient(raw);
+  if (!normalized) {
+    throw new NodeOperationError(
+      ctx.getNode(),
+      `${label} is not a valid phone number. Use the international form, e.g. 628123456789.`,
+      { itemIndex },
+    );
+  }
+  return normalized;
+}
+
+/**
+ * Turns a `collection` parameter into a query object.
+ *
+ * Only entries the user actually added are present, so anything left undefined,
+ * null, or blank is dropped. `0` and `false` are meaningful (offset 0, a disabled
+ * flag) and are kept.
+ */
+export function toQueryParams(options: IDataObject | undefined): IDataObject {
+  const qs: IDataObject = {};
+  for (const [key, value] of Object.entries(options ?? {})) {
+    if (value !== undefined && value !== null && value !== '') {
+      qs[key] = value;
+    }
+  }
+  return qs;
+}
+
+/**
+ * Normalises a list parameter into a trimmed, blank-free array of strings.
+ *
+ * These fields are plain strings rather than `multipleValues` collections so an
+ * expression can drive them. Three shapes are accepted: a real array (from an
+ * expression), a JSON array string, or a comma/newline-separated string.
+ */
+function listEntry(value: unknown): string {
+  if (typeof value === 'object' && value !== null) {
+    throw new Error(
+      'List entries must be text. Map the expression to the values themselves, e.g. {{ $json.items.map((i) => i.id) }}.',
+    );
+  }
+  return String(value ?? '').trim();
+}
+
+export function toStringList(raw: unknown): string[] {
+  if (raw === undefined || raw === null || raw === '') {
+    return [];
+  }
+  if (Array.isArray(raw)) {
+    return raw.map(listEntry).filter(Boolean);
+  }
+  if (typeof raw !== 'string') {
+    return [listEntry(raw)].filter(Boolean);
+  }
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('[')) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      // Not JSON after all: fall through to the separator split.
+    }
+    if (Array.isArray(parsed)) {
+      return parsed.map(listEntry).filter(Boolean);
+    }
+  }
+  return trimmed
+    .split(/[,\n]/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Reads the shared list options (Return All / Limit / extra filters) into the
+ * query and returnAll flag every list operation uses. `limit` is only sent when
+ * one page is wanted; with Return All the server default page size is used and
+ * the executor follows the cursor.
+ */
+export function readListOptions(
+  ctx: IExecuteFunctions,
+  itemIndex: number,
+  filtersParam = 'filters',
+): { qs: IDataObject; returnAll: boolean } {
+  const returnAll = ctx.getNodeParameter('returnAll', itemIndex, false) as boolean;
+  const qs = toQueryParams(ctx.getNodeParameter(filtersParam, itemIndex, {}) as IDataObject);
+  if (!returnAll) {
+    const limit = ctx.getNodeParameter('limit', itemIndex, 50) as number;
+    qs.limit = limit;
+  }
+  return { qs, returnAll };
+}
+
+/**
+ * Reads an ISO date/time parameter and hands back the ISO string the API takes.
+ * An expression can supply epoch milliseconds; those are converted so the server
+ * sees one shape. Blank means "not set".
+ */
+export function optionalIsoDate(
+  ctx: IExecuteFunctions,
+  paramName: string,
+  label: string,
+  itemIndex: number,
+): string | undefined {
+  const raw = ctx.getNodeParameter(paramName, itemIndex, '');
+  if (raw === undefined || raw === null || raw === '') {
+    return undefined;
+  }
+  const ms = typeof raw === 'number' ? raw : Date.parse(String(raw));
+  if (!Number.isFinite(ms)) {
+    throw new NodeOperationError(ctx.getNode(), `${label} is not a valid date`, { itemIndex });
+  }
+  return new Date(ms).toISOString();
+}

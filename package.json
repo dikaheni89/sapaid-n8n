@@ -1,0 +1,72 @@
+{
+  "name": "n8n-nodes-sapaid",
+  "version": "0.1.0",
+  "description": "n8n community nodes for sapaid, the WhatsApp API platform for Indonesian developers and CS teams",
+  "author": {
+    "name": "sapaid",
+    "email": "adamalfatih588@gmail.com"
+  },
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "sapaid",
+    "whatsapp",
+    "whatsapp-api",
+    "messaging",
+    "automation",
+    "indonesia"
+  ],
+  "license": "MIT",
+  "homepage": "https://sapaid.id",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sapaid/n8n-nodes-sapaid.git"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc && node scripts/copy-icons.mjs",
+    "dev": "tsc --watch",
+    "format": "prettier --write \"credentials/**/*.ts\" \"nodes/**/*.ts\" \"index.ts\"",
+    "format:check": "prettier --check \"credentials/**/*.ts\" \"nodes/**/*.ts\" \"index.ts\"",
+    "lint": "eslint credentials nodes index.ts --ext .ts",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepublishOnly": "npm run build",
+    "prepare": "husky"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/SapaidApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/Sapaid/Sapaid.node.js",
+      "dist/nodes/SapaidTrigger/SapaidTrigger.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.4.1",
+    "@commitlint/config-conventional": "^20.4.1",
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.65.0",
+    "@typescript-eslint/parser": "^8.65.0",
+    "eslint": "^8.56.0",
+    "husky": "^9.1.7",
+    "n8n-workflow": "^1.22.0",
+    "prettier": "^3.2.0",
+    "typescript": "^5.3.0"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
